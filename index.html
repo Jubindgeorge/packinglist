@@ -694,7 +694,10 @@
       resize: none !important;
       color: #000 !important;
     }
-
+.right { 
+    text-align: right; 
+    padding-right: 15px !important; 
+}
     @media print {
       body {
         background: #fff;
@@ -2282,7 +2285,6 @@ async function addItemDescriptionToDb(value) {
   // 2. Add to local memory and sort
   itemDescriptionDb.push(normalized);
   itemDescriptionDb.sort((a, b) => a.localeCompare(b));
-
   // 3. Save to LocalStorage (Immediate local backup)
   try {
     saveItemDescriptionDb();
@@ -2836,71 +2838,77 @@ function wireDescriptionInputs() {
       }
     }
 
-    async function generateDeliveryNote() {
-      const dateValue = document.getElementById('packing_date').value.trim();
-      if (!isValidDateFormat(dateValue)) {
-        alert('Date must be in dd.MMM.yyyy format. Example: 06.Feb.2026');
+async function generateDeliveryNote() {
+    // 1. SMART FETCH: Invoice Number
+    const invNo = document.getElementById('invoice_no')?.value || 
+                  document.getElementById('inv_ref')?.value || 
+                  document.getElementById('packing_inv')?.value || "N/A";
+
+    // 2. SMART FETCH: No. of Packages
+    const packages = document.getElementById('no_of_packages')?.value || 
+                     document.getElementById('total_packages')?.value || 
+                     document.getElementById('packing_pkg')?.value || "1";
+
+    // --- ADDED: FETCH ADDRESSES FROM YOUR HTML ---
+    const billingAddress = document.getElementById('billing_address')?.value || "";
+    const shippingAddress = document.getElementById('shipping_address')?.value || "";
+    // ---------------------------------------------
+
+    const dateValue = document.getElementById('packing_date')?.value.trim();
+    const refNo = document.getElementById('reference_no')?.value || "N/A";
+    const weight = document.getElementById('gross_weight')?.value || "0";
+
+    if (!dateValue) {
+        alert('Please enter a packing date.');
         return;
-      }
-
-      calculateTotals();
-      updatePdfConditionalRows();
-      const summaryItems = buildDeliverySummaryItems();
-      if (summaryItems.length === 0) {
-        alert('No item descriptions found to summarize.');
-        return;
-      }
-
-      const invRef = document.getElementById('inv_ref').value.trim() || 'delivery-note';
-      const data = collectPackingListData();
-
-      try {
-        const serverBlob = await requestServerDeliveryNotePdfBlob(data);
-        triggerBlobDownload(serverBlob, 'Delivery_Note_' + invRef + '.pdf');
-        return;
-      } catch (serverErr) {
-        console.warn('Server-side delivery note unavailable, falling back to legacy client delivery note.', serverErr);
-      }
-
-      const deliveryElement = buildDeliveryNoteElement(summaryItems);
-      document.body.appendChild(deliveryElement);
-      syncAddressPrintBlocks(deliveryElement);
-      const restoreGrossWeight = prepareGrossWeightForPdf(deliveryElement);
-      const restoreTextareas = prepareTextareasForPdf(deliveryElement);
-      await waitForRender();
-
-      try {
-        await ensureHtml2Pdf();
-        await waitForImages(deliveryElement);
-        const pdf = await buildNumberedPdf(deliveryElement);
-        pdf.save('Delivery_Note_' + invRef + '.pdf');
-      } catch (err) {
-        if (isCanvasSecurityError(err)) {
-          try {
-            deliveryElement.classList.add('pdf-no-images');
-            await waitForImages(deliveryElement);
-            const retryPdf = await buildNumberedPdf(deliveryElement);
-            retryPdf.save('Delivery_Note_' + invRef + '.pdf');
-            return;
-          } catch (retryErr) {
-            alert('Failed to generate delivery note. ' + (retryErr && retryErr.message ? retryErr.message : ''));
-          } finally {
-            deliveryElement.classList.remove('pdf-no-images');
-          }
-        } else if (isPdfLibraryError(err)) {
-          alert('Direct PDF download is unavailable because the PDF library failed to load.');
-        } else {
-          alert('Failed to generate delivery note. ' + (err && err.message ? err.message : ''));
-        }
-      } finally {
-        restoreTextareas();
-        restoreGrossWeight();
-        if (deliveryElement.parentNode) {
-          deliveryElement.parentNode.removeChild(deliveryElement);
-        }
-      }
     }
 
+    // 3. SCRAPE TABLE ITEMS
+    let finalItems = [];
+    const rows = document.querySelectorAll('#packing_table tbody tr');
+
+    rows.forEach((row, index) => {
+        const descCell = row.querySelector('td:nth-child(3)');
+        const qtyCell = row.querySelector('td:nth-child(4)');
+
+        if (descCell && qtyCell) {
+            const descInput = descCell.querySelector('input');
+            const name = descInput ? descInput.value.trim() : descCell.innerText.trim();
+
+            const qtyInput = qtyCell.querySelector('input');
+            const qty = qtyInput ? qtyInput.value.trim() : qtyCell.innerText.trim();
+
+            if (name !== "") {
+                finalItems.push({
+                    id: index + 1,
+                    name: name.toUpperCase(),
+                    sku: row.dataset.sku || "N/A",
+                    hsn: "3303.00.10",
+                    qty: qty || "0"
+                });
+            }
+        }
+    });
+
+    // 4. PREPARE DATA PACKAGE
+    const deliveryData = {
+        noteNo: invNo,
+        date: dateValue,
+        ref: refNo,
+        pkg: packages,
+        weight: weight,
+        // --- ADDED TO DATA PACKAGE ---
+        billTo: billingAddress,      
+        deliveryTo: shippingAddress, 
+        // ------------------------------
+        items: finalItems
+    };
+
+    console.log("DEBUG SENDING:", deliveryData); 
+
+    localStorage.setItem('deliveryNoteData', JSON.stringify(deliveryData));
+    window.open('delivery.html', '_blank');
+}
     function normalizeAddressText(value) {
       return (value || '').trim();
     }
@@ -3254,6 +3262,51 @@ function wireDescriptionInputs() {
     document.getElementById('packing_date').value = todayFormatted();
     loadAddressList();
     calculateTotals();
+window.onload = () => {
+    const data = JSON.parse(localStorage.getItem('deliveryNoteData'));
+    if (!data) return;
+
+    // Mapping metadata with a fallback for Invoice Number
+    document.getElementById('out_no').innerText = ": " + (data.noteNo || data.invNo || "");
+    document.getElementById('out_date').innerText = ": " + (data.date || "");
+    document.getElementById('out_ref').innerText = ": " + (data.ref || "");
+    document.getElementById('out_pkg').innerText = ": " + (data.pkg || "");
+    document.getElementById('out_wt').innerText = ": " + (data.weight || "");
+
+    // Mapping the addresses
+    document.getElementById('out_bill_to').innerText = data.billTo || "";
+    document.getElementById('out_delivery_to').innerText = data.deliveryTo || "";
+
+    // Populate Table
+    const tbody = document.getElementById('table_body');
+    let total = 0;
+    
+    data.items.forEach((item, index) => {
+        // REMOVED <br> and used a span for 'pcs' to keep them on the same line
+        const row = `<tr>
+            <td class="center">${index + 1}</td>
+            <td>
+                <strong>${item.name}</strong>
+                <span class="sku">SKU : ${item.sku}</span>
+            </td>
+            <td class="center">${item.hsn || "3303.00.10"}</td>
+            <td class="right" style="white-space: nowrap;">
+                ${item.qty} <span style="font-size: 9px; font-weight: normal; margin-left: 3px;">pcs</span>
+            </td>
+        </tr>`;
+        
+        tbody.insertAdjacentHTML('beforeend', row);
+        
+        const q = parseFloat(item.qty);
+        if (!isNaN(q)) total += q;
+    });
+
+    document.getElementById('out_total_qty').innerText = total.toFixed(2);
+    
+    // Footer page numbering
+    const invLabel = data.noteNo || data.invNo || "DOC";
+    document.getElementById('footer_id').innerText = invLabel + " - Page 1 of 1";
+};
   </script>
 </body>
 </html>
